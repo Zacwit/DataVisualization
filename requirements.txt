@@ -1,0 +1,6 @@
+# Pinned, broadly compatible versions for reproducibility
+# Note: Python 3.13 requires NumPy 2.x; 1.x doesn't support 3.13.
+pandas>=2.0,<3.0
+matplotlib>=3.7,<4.0
+numpy>=2.2,<3.0
+bokeh>=3.4,<4.0
