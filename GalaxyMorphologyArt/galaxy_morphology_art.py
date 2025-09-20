@@ -46,6 +46,7 @@ class GalaxyArtVisualizer:
             AND petroMag_r BETWEEN 15 AND 18
             AND petroR50_r > 0 AND petroR50_r < 10
             AND deVAB_r > 0
+            AND dec BETWEEN -1.2 AND -0.8
         ORDER BY objid
         """
         
@@ -215,7 +216,7 @@ class GalaxyArtVisualizer:
         # Generate synthetic data that mimics SDSS galaxy properties
         self.galaxy_data = pd.DataFrame({
             'ra': np.random.uniform(148, 152, n_galaxies),
-            'dec': np.random.uniform(0, 4, n_galaxies),
+            'dec': np.random.uniform(0.8, 1.2, n_galaxies),  # Adjusted range from 0-4 to 0.8-1.2
             'redshift': np.random.beta(2, 5, n_galaxies) * 0.3,  # Typical range 0-0.3
             'petroR50_r': np.random.lognormal(1.0, 0.5, n_galaxies),  # Half-light radius
             'petroR90_r': np.random.lognormal(1.5, 0.5, n_galaxies),  # 90% light radius
@@ -253,35 +254,52 @@ class GalaxyArtVisualizer:
                 self.galaxy_data['dered_r'] - self.galaxy_data['dered_i']
             )
     
-    def redshift_to_color(self, z, cmap_name='cosmic'):
+    def redshift_to_color(self, z, cmap_name='plasma'):
         """
-        Convert redshift to color with physically-motivated mapping
+        Convert redshift to color with consistent mapping across all plots
+        使用偏红的颜色映射，避免蓝色部分，更符合红移的物理直觉
         
         Parameters:
         -----------
         z : float or array, Redshift values
-        cmap_name : str, Color scheme ('cosmic', 'doppler', 'thermal')
+        cmap_name : str, Color scheme (default: 'plasma' for reddish colors)
         """
-        # Normalize redshift to 0-1 range
-        z_norm = np.clip(z / 0.3, 0, 1)  # Assuming max z = 0.3 for nearby galaxies
-        
-        if cmap_name == 'cosmic':
-            # Blue (nearby) -> Red (distant), mimicking cosmological redshift
-            hue = 240 - z_norm * 240  # Blue to Red in HSV
-            colors = [colorsys.hsv_to_rgb(h/360, 0.8, 0.9) for h in hue]
-        elif cmap_name == 'doppler':
-            # Classic Doppler shift coloring
-            cmap = plt.cm.RdYlBu_r
-            colors = cmap(z_norm)
-        elif cmap_name == 'thermal':
-            # Hot colormap for "temperature" of universe
-            cmap = plt.cm.hot
-            colors = cmap(1 - z_norm)
+        # Use consistent global redshift range for normalization
+        # Get actual data range for better normalization
+        if hasattr(self, 'galaxy_data') and self.galaxy_data is not None and 'redshift' in self.galaxy_data.columns:
+            z_min = self.galaxy_data['redshift'].min()
+            z_max = self.galaxy_data['redshift'].max()
         else:
-            cmap = plt.cm.viridis
-            colors = cmap(z_norm)
+            # Fallback range
+            z_min, z_max = 0.0, 0.3
+            
+        # Normalize redshift to 0-1 range using actual data range
+        z_norm = np.clip((np.array(z) - z_min) / (z_max - z_min), 0, 1)
+        
+        # Use plasma colormap with focus on red/orange/yellow range (避免蓝紫色)
+        # Map to the warmer part of plasma colormap (0.3-1.0 range)
+        plasma_range = 0.3 + z_norm * 0.7  # 映射到plasma的0.3-1.0范围，避免蓝紫色
+        cmap = plt.cm.plasma
+        colors = cmap(plasma_range)
         
         return colors
+    
+    def get_redshift_colormap_info(self):
+        """Get consistent colormap and normalization info for colorbars"""
+        if hasattr(self, 'galaxy_data') and self.galaxy_data is not None and 'redshift' in self.galaxy_data.columns:
+            z_min = self.galaxy_data['redshift'].min()
+            z_max = self.galaxy_data['redshift'].max()
+        else:
+            z_min, z_max = 0.0, 0.3
+            
+        # 创建一个自定义的颜色映射，对应plasma的0.3-1.0范围
+        from matplotlib.colors import LinearSegmentedColormap
+        plasma_cmap = plt.cm.plasma
+        # 提取plasma colormap的0.3-1.0部分
+        colors = plasma_cmap(np.linspace(0.3, 1.0, 256))
+        custom_cmap = LinearSegmentedColormap.from_list('plasma_warm', colors)
+        
+        return custom_cmap, plt.Normalize(vmin=z_min, vmax=z_max)
     
     def create_morphology_art(self):
         """Create artistic visualization based on galaxy morphology"""
@@ -333,8 +351,8 @@ class GalaxyArtVisualizer:
             else:
                 size = np.random.uniform(0.02, 0.08)
             
-            # Color based on redshift
-            color = self.redshift_to_color(np.array([galaxy['redshift']]), 'cosmic')[0]
+            # Color based on redshift - using consistent mapping
+            color = self.redshift_to_color(np.array([galaxy['redshift']]))[0]
             
             if is_elliptical:
                 # Elliptical galaxy - use ellipse
@@ -370,14 +388,24 @@ class GalaxyArtVisualizer:
                       color='cyan', alpha=0.1, linewidth=0.5)
         
         ax.set_xlim(self.galaxy_data['ra'].min()-0.5, self.galaxy_data['ra'].max()+0.5)
-        ax.set_ylim(self.galaxy_data['dec'].min()-0.5, self.galaxy_data['dec'].max()+0.5)
+        
+        # Adjust y-axis range to focus on the main galaxy distribution
+        # For SDSS data (negative dec values), keep the range tight
+        dec_range = self.galaxy_data['dec'].max() - self.galaxy_data['dec'].min()
+        dec_margin = max(0.05, dec_range * 0.1)  # At least 0.05 degrees margin
+        ax.set_ylim(self.galaxy_data['dec'].min() - dec_margin, 
+                   self.galaxy_data['dec'].max() + dec_margin)
+        
+        # Set equal aspect ratio to prevent shape distortion
+        ax.set_aspect('equal', adjustable='box')
+        
         ax.set_xlabel('Right Ascension (degrees)', color='white')
         ax.set_ylabel('Declination (degrees)', color='white')
         ax.tick_params(colors='white')
         
-        # Add redshift colorbar
-        sm = plt.cm.ScalarMappable(cmap=plt.cm.RdYlBu_r, 
-                                   norm=plt.Normalize(vmin=0, vmax=0.3))
+        # Add redshift colorbar with consistent mapping
+        cmap, norm = self.get_redshift_colormap_info()
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
         sm.set_array([])
         cbar = plt.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
         cbar.set_label('Redshift (z)', color='white')
@@ -400,15 +428,16 @@ class GalaxyArtVisualizer:
         values = self.galaxy_data['redshift'].values
         z_grid = griddata(points, values, (ra_grid, dec_grid), method='cubic')
         
-        # Create artistic gradient
+        # Create artistic gradient with consistent colormap
+        cmap, norm = self.get_redshift_colormap_info()
         im = ax.imshow(z_grid, extent=[ra_range.min(), ra_range.max(),
                                        dec_range.min(), dec_range.max()],
-                      cmap='twilight', aspect='auto', alpha=0.8, origin='lower')
+                      cmap=cmap, norm=norm, aspect='auto', alpha=0.8, origin='lower')
         
-        # Overlay actual galaxy positions
+        # Overlay actual galaxy positions with consistent coloring
         scatter = ax.scatter(self.galaxy_data['ra'], self.galaxy_data['dec'],
                            c=self.galaxy_data['redshift'], s=20,
-                           cmap='plasma', edgecolors='white', linewidth=0.5,
+                           cmap=cmap, norm=norm, edgecolors='white', linewidth=0.5,
                            alpha=0.9, zorder=5)
         
         ax.set_xlabel('Right Ascension (degrees)', color='white')
@@ -430,10 +459,10 @@ class GalaxyArtVisualizer:
         else:
             sizes = np.random.uniform(50, 500, len(self.galaxy_data))
         
-        # Create color array based on morphology and redshift
+        # Create color array based on redshift with consistent mapping
         colors = []
         for _, galaxy in self.galaxy_data.iterrows():
-            z_color = self.redshift_to_color(np.array([galaxy['redshift']]), 'thermal')[0]
+            z_color = self.redshift_to_color(np.array([galaxy['redshift']]))[0]
             colors.append(z_color)
         
         # Plot bubbles
@@ -457,6 +486,97 @@ class GalaxyArtVisualizer:
         ax.grid(True, alpha=0.2, color='white')
         ax.set_xlim(-0.01, self.galaxy_data['redshift'].max() * 1.1)
     
+    def _draw_realistic_galaxy(self, ax, x, y, size, color, galaxy_data, alpha=0.7):
+        """Draw realistic galaxy shapes based on morphological parameters"""
+        from matplotlib.patches import Ellipse, Circle, Wedge
+        
+        # Extract morphological parameters
+        concentration = galaxy_data.get('concentration', 2.5)
+        axis_ratio = galaxy_data.get('expAB_r', 0.7)  # b/a ratio
+        is_spiral = galaxy_data.get('spiral', 0) == 1
+        
+        # Scale size appropriately for visibility - increased for better visibility
+        base_size = size / 800  # Increased from 2000 to 800 for larger galaxies
+        
+        if is_spiral:
+            # Spiral galaxy: disk + arms + bulge
+            
+            # Main disk (more extended)
+            disk_width = base_size * 1.5  # Increased from 1.2 to 1.5
+            disk_height = disk_width * axis_ratio
+            rotation_angle = np.random.uniform(0, 180)
+            
+            # Disk with gradient effect
+            disk = Ellipse((x, y), disk_width, disk_height, 
+                          angle=rotation_angle, 
+                          facecolor=color, alpha=alpha*0.6,
+                          edgecolor='white', linewidth=0.3)
+            ax.add_patch(disk)
+            
+            # Inner disk (brighter core)
+            inner_disk = Ellipse((x, y), disk_width*0.6, disk_height*0.6,
+                               angle=rotation_angle,
+                               facecolor=color, alpha=alpha*0.8,
+                               edgecolor='none')
+            ax.add_patch(inner_disk)
+            
+            # Spiral arms (more realistic)
+            arm_color = color if isinstance(color, str) else tuple(list(color) + [alpha*0.7])
+            arm_length = disk_width * 0.8
+            
+            # Two spiral arms
+            for arm_offset in [0, 180]:
+                # Create spiral arm using multiple small ellipses
+                for i in range(8):
+                    arm_angle = rotation_angle + arm_offset + i * 25
+                    arm_radius = arm_length * (0.3 + 0.7 * i / 8)
+                    arm_x = x + arm_radius * np.cos(np.radians(arm_angle)) * 0.5
+                    arm_y = y + arm_radius * np.sin(np.radians(arm_angle)) * 0.3
+                    
+                    arm_segment = Ellipse((arm_x, arm_y), 
+                                        disk_width*0.2, disk_height*0.12,  # Increased from 0.15, 0.08
+                                        angle=arm_angle,
+                                        facecolor=color, alpha=alpha*0.4,
+                                        edgecolor='none')
+                    ax.add_patch(arm_segment)
+            
+            # Central bulge (based on concentration)
+            bulge_size = base_size * 0.4 * (concentration / 3.0)  # Increased from 0.3 to 0.4
+            bulge = Circle((x, y), bulge_size,
+                         facecolor=color, alpha=alpha*0.9,
+                         edgecolor='white', linewidth=0.2)
+            ax.add_patch(bulge)
+            
+        else:
+            # Elliptical galaxy: smoother, more concentrated
+            
+            # Main elliptical body
+            ell_width = base_size * 1.1  # Increased from 0.8 to 1.1
+            ell_height = ell_width * axis_ratio
+            rotation_angle = np.random.uniform(0, 180)
+            
+            # Outer halo
+            outer_ell = Ellipse((x, y), ell_width*1.6, ell_height*1.6,  # Increased from 1.4 to 1.6
+                              angle=rotation_angle,
+                              facecolor=color, alpha=alpha*0.3,
+                              edgecolor='white', linewidth=0.2)
+            ax.add_patch(outer_ell)
+            
+            # Main body
+            main_ell = Ellipse((x, y), ell_width, ell_height,
+                             angle=rotation_angle,
+                             facecolor=color, alpha=alpha*0.7,
+                             edgecolor='white', linewidth=0.3)
+            ax.add_patch(main_ell)
+            
+            # Central concentration (brighter core)
+            central_size = base_size * 0.5 * (concentration / 3.0)  # Increased from 0.4 to 0.5
+            central_ell = Ellipse((x, y), central_size, central_size*axis_ratio,
+                                angle=rotation_angle,
+                                facecolor=color, alpha=alpha*0.9,
+                                edgecolor='none')
+            ax.add_patch(central_ell)
+    
     def _plot_concentration_spiral(self, ax):
         """Create an artistic spiral based on concentration indices"""
         ax.set_facecolor('#000814')
@@ -474,8 +594,8 @@ class GalaxyArtVisualizer:
         x = r * np.cos(theta)
         y = r * np.sin(theta)
         
-        # Colors based on redshift
-        colors = self.redshift_to_color(sorted_data['redshift'].values, 'cosmic')
+        # Colors based on redshift with consistent mapping
+        colors = self.redshift_to_color(sorted_data['redshift'].values)
         
         # Sizes based on concentration or magnitude
         if 'concentration' in sorted_data.columns:
@@ -483,12 +603,16 @@ class GalaxyArtVisualizer:
         else:
             sizes = np.random.uniform(20, 200, n_galaxies)
         
-        # Plot spiral
-        scatter = ax.scatter(x, y, c=colors, s=sizes, alpha=0.7,
-                           edgecolors='white', linewidth=0.5)
+        # Plot spiral with realistic galaxy shapes
+        for i, (xi, yi, color, size) in enumerate(zip(x, y, colors, sizes)):
+            # Get galaxy data for this entry
+            galaxy_data = sorted_data.iloc[i].to_dict()
+            
+            # Draw realistic galaxy shape
+            self._draw_realistic_galaxy(ax, xi, yi, size, color, galaxy_data, alpha=0.8)
         
         # Connect with lines for spiral effect
-        ax.plot(x, y, color='cyan', alpha=0.2, linewidth=1)
+        ax.plot(x, y, color='cyan', alpha=0.15, linewidth=0.8)
         
         # Add radial grid
         for i in range(1, 4):
@@ -519,30 +643,30 @@ class GalaxyArtVisualizer:
         y = self.galaxy_data['dec']
         z = self.galaxy_data['redshift'] * 100  # Scale for visibility
         
-        # Colors based on morphology
-        colors = []
-        for _, galaxy in self.galaxy_data.iterrows():
-            if galaxy.get('spiral', 0) > 0.5:
-                colors.append('gold')
-            else:
-                colors.append('crimson')
+        # Use redshift values for color mapping with consistent normalization
+        redshift_colors = self.galaxy_data['redshift']
+        cmap, norm = self.get_redshift_colormap_info()
         
-        # Plot galaxies
-        scatter = ax.scatter(x, y, z, c=colors, s=50, alpha=0.7,
-                           edgecolors='white', linewidth=0.5)
+        # Separate galaxies by morphology for different markers
+        spiral_mask = self.galaxy_data.get('spiral', 0) > 0.5
+        elliptical_mask = ~spiral_mask
         
-        # Add connecting lines for nearby galaxies (cosmic web effect)
-        from scipy.spatial.distance import pdist, squareform
-        positions = np.column_stack([x, y, z])
-        distances = squareform(pdist(positions))
+        # Plot spiral galaxies with star markers
+        if spiral_mask.any():
+            spiral_scatter = ax.scatter(x[spiral_mask], y[spiral_mask], z[spiral_mask], 
+                                      c=redshift_colors[spiral_mask], s=60, alpha=0.8,
+                                      marker='*', edgecolors='white', linewidth=0.5,
+                                      cmap=cmap, norm=norm, label='Spiral Galaxies')
         
-        # Connect galaxies within threshold distance
-        threshold = 15
-        for i in range(len(positions)):
-            for j in range(i+1, len(positions)):
-                if distances[i, j] < threshold:
-                    ax.plot3D(*zip(positions[i], positions[j]), 
-                            color='cyan', alpha=0.1, linewidth=0.5)
+        # Plot elliptical galaxies with circle markers
+        if elliptical_mask.any():
+            elliptical_scatter = ax.scatter(x[elliptical_mask], y[elliptical_mask], z[elliptical_mask], 
+                                          c=redshift_colors[elliptical_mask], s=50, alpha=0.8,
+                                          marker='o', edgecolors='white', linewidth=0.5,
+                                          cmap=cmap, norm=norm, label='Elliptical Galaxies')
+        
+        # Connecting lines removed for cleaner visualization
+        # (Previously showed cosmic web effect with lines between nearby galaxies)
         
         ax.set_xlabel('Right Ascension', color='white', labelpad=10)
         ax.set_ylabel('Declination', color='white', labelpad=10)
@@ -557,12 +681,20 @@ class GalaxyArtVisualizer:
         ax.grid(True, alpha=0.2, color='white')
         ax.tick_params(colors='white')
         
-        # Add legend
+        # Add colorbar for redshift
+        if spiral_mask.any() or elliptical_mask.any():
+            # Use the last scatter plot for colorbar reference
+            scatter_ref = spiral_scatter if spiral_mask.any() else elliptical_scatter
+            cbar = plt.colorbar(scatter_ref, ax=ax, shrink=0.5, aspect=20, pad=0.1)
+            cbar.set_label('Redshift (z)', color='white', rotation=270, labelpad=15)
+            cbar.ax.tick_params(colors='white')
+        
+        # Add legend for galaxy morphology (shapes)
         from matplotlib.lines import Line2D
         legend_elements = [
-            Line2D([0], [0], marker='o', color='w', markerfacecolor='gold', 
-                  markersize=10, label='Spiral Galaxies', linestyle=''),
-            Line2D([0], [0], marker='o', color='w', markerfacecolor='crimson', 
+            Line2D([0], [0], marker='*', color='w', markerfacecolor='gray', 
+                  markersize=12, label='Spiral Galaxies', linestyle=''),
+            Line2D([0], [0], marker='o', color='w', markerfacecolor='gray', 
                   markersize=10, label='Elliptical Galaxies', linestyle='')
         ]
         ax.legend(handles=legend_elements, loc='upper right', 
