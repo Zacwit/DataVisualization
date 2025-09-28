@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from matplotlib.patches import Circle
 import requests
+import random
 from skyfield.api import load, EarthSatellite, utc
 from skyfield.sgp4lib import EarthSatellite as SGP4Satellite
 from datetime import datetime, timedelta
@@ -147,7 +148,7 @@ class SatelliteVisualizer:
         """Load satellite TLE data from various sources"""
         satellite_sources = {
             'ISS & Crew Vehicles': 'https://celestrak.com/NORAD/elements/stations.txt',
-            'Starlink': 'https://celestrak.com/NORAD/elements/starlink.txt',
+            'Starlink': 'https://celestrak.com/NORAD/elements/gp.php?GROUP=starlink&FORMAT=tle',
             'GPS Constellation': 'https://celestrak.com/NORAD/elements/gps-ops.txt',
             'Bright Satellites': 'https://celestrak.com/NORAD/elements/visual.txt',
             'Weather Satellites': 'https://celestrak.com/NORAD/elements/weather.txt'
@@ -162,6 +163,7 @@ class SatelliteVisualizer:
                 response.raise_for_status()
                 
                 lines = response.text.strip().split('\n')
+                category_satellites = []
                 
                 # Parse TLE data (3 lines per satellite)
                 for i in range(0, len(lines) - 2, 3):
@@ -172,20 +174,35 @@ class SatelliteVisualizer:
                         
                         try:
                             satellite = EarthSatellite(line1, line2, name, self.ts)
-                            self.satellites[name] = {
+                            category_satellites.append({
+                                'name': name,
                                 'satellite': satellite,
                                 'category': category,
-                                'color': self.category_colors.get(category, '#FFFFFF')  # Use category color
-                            }
-                            
-                            # Limit total satellites for performance
-                            if len(self.satellites) >= 100:
-                                break
+                                'color': self.category_colors.get(category, '#FFFFFF')
+                            })
                         except Exception as e:
                             continue
                 
-                if len(self.satellites) >= 100:
-                    break
+                # Limit each category to 10-50 satellites
+                if len(category_satellites) > 50:
+                    # 如果超过50个，随机选择50个
+                    category_satellites = random.sample(category_satellites, 50)
+                elif len(category_satellites) < 10 and len(category_satellites) > 0:
+                    # 如果少于10个但大于0个，保持原数量
+                    pass
+                elif len(category_satellites) == 0:
+                    print(f"  Warning: No valid satellites found in {category}")
+                    continue
+                
+                # Add to main satellites dictionary
+                for sat_data in category_satellites:
+                    self.satellites[sat_data['name']] = {
+                        'satellite': sat_data['satellite'],
+                        'category': sat_data['category'],
+                        'color': sat_data['color']
+                    }
+                
+                print(f"  Loaded {len(category_satellites)} satellites from {category}")
                     
             except Exception as e:
                 print(f"Failed to load {category}: {e}")
@@ -252,9 +269,9 @@ class SatelliteVisualizer:
         fig, ax = plt.subplots(figsize=(15, 15), facecolor='black')
         ax.set_facecolor('black')
         
-        # Time range for orbital art (24 hours)
+        # Time range for orbital art (1 hour)
         start_datetime = datetime.now()
-        times_datetime = [start_datetime + timedelta(minutes=i*10) for i in range(144)]  # Every 10 minutes for 24 hours
+        times_datetime = [start_datetime + timedelta(minutes=i*1) for i in range(60)]  # Every 1 minute for 1 hour
         times = self.ts.utc([t.replace(tzinfo=utc) for t in times_datetime])
         
         # Earth
@@ -264,8 +281,27 @@ class SatelliteVisualizer:
         # Track which categories are actually plotted for legend
         plotted_categories = set()
         
-        # Plot orbital paths
-        for name, sat_info in list(self.satellites.items())[:20]:  # Limit for performance
+        # Plot orbital paths - select satellites from each category fairly
+        # Get a representative sample from each category
+        selected_satellites = {}
+        for name, sat_info in self.satellites.items():
+            category = sat_info['category']
+            if category not in selected_satellites:
+                selected_satellites[category] = []
+            selected_satellites[category].append((name, sat_info))
+        
+        # Select up to 4 satellites from each category (max 20 total)
+        satellites_to_plot = []
+        for category, sats in selected_satellites.items():
+            # Take first 4 satellites from each category
+            satellites_to_plot.extend(sats[:4])
+        
+        # Limit to 20 satellites total for performance
+        satellites_to_plot = satellites_to_plot[:20]
+        
+        print(f"Plotting {len(satellites_to_plot)} satellites from {len(selected_satellites)} categories")
+        
+        for name, sat_info in satellites_to_plot:
             satellite = sat_info['satellite']
             category = sat_info['category']
             color = sat_info['color']
@@ -289,7 +325,7 @@ class SatelliteVisualizer:
         ax.set_xlim(-20000, 20000)
         ax.set_ylim(-20000, 20000)
         ax.set_aspect('equal')
-        ax.set_title('24-Hour Orbital Art Pattern', color='white', fontsize=16, fontweight='bold')
+        ax.set_title('1-Hour Orbital Art Pattern', color='white', fontsize=16, fontweight='bold')
         ax.grid(True, alpha=0.2, color='gray')
         
         # Add legend for data sources
@@ -394,7 +430,7 @@ def main():
     while True:
         print("\nChoose visualization mode:")
         print("1. Real-time satellite tracking (animated)")
-        print("2. Create orbital art pattern (24-hour paths)")
+        print("2. Create orbital art pattern (1-hour paths)")
         print("3. Current constellation map (static)")
         print("4. Exit")
         
